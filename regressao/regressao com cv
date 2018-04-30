@@ -1,0 +1,184 @@
+library(readr)
+library(ggplot2)
+library(e1071)
+library(ROCR)
+library(Hmisc)
+library(ggm)
+library(car)
+library(pROC)
+library(plyr)
+library(caret)
+library(caTools)
+
+set.seed(42)
+
+#Verificação da estrutura de dados
+
+credito <- read_delim("Pos/Mineracao/qconlondon2016_sample_data.csv",
+                   ";", 
+                   escape_double = FALSE, 
+                   trim_ws = TRUE)
+
+# Primeiras visualizações da estrutura dos dados
+
+View(credito)
+str(credito)
+summary(credito)
+describe(credito)
+
+# Partindo da tabela que temos, podemos delimitar nosso problema em criar um modelo preditivo que consiga prever o risco de fraudes baseado nas variáveis apresentadas
+# Podemos ver que os dados estão sem grandes distorções, mas há algumas considerações a fazer:
+
+# Para facilitar o trabalho, vamos renomear as colunas da nossa tabela de trabalho
+
+cred <- rename(credito, replace = c("fraudulent"="fraude", 
+                                  "charge_time"="diahora", 
+                                  "amount"="valor", 
+                                  "card_country"="país", 
+                                  "card_use_24h"="uso24h"))
+#Transformar fraude em fator
+
+cred$fraude[cred$fraude == "False"] <- 0
+cred$fraude[cred$fraude == "True"] <- 1
+cred$fraude <- factor(cred$fraude,
+                      levels = c(0,1),
+                      labels = c("False", "True"))
+
+#Transformar a data de POSIXct em numérico
+cred$diahora = as.numeric(cred$diahora)
+
+
+#Transformar o valor em numérico
+cred$valor = as.numeric(cred$valor)
+
+#Transformar país em factor
+table(cred$país)
+cred$país[cred$país == "AU"] <- 1
+cred$país[cred$país == "GB"] <- 2
+cred$país[cred$país == "US"] <- 3
+
+cred$país <- factor(cred$país,
+                      levels = c(1,2,3),
+                      labels = c("AU", "GB", "US"))
+
+# Qualquer inferencia sobre o que exatamente é a variável "uso24h" é apenas conjectura. Vamos usar a variável tal como ela veio e verificar se ela se adequa ao modelo
+
+cred$uso24h = as.numeric(cred$uso24h)
+
+summary(cred)
+str(cred)
+
+# Exploração dos dados em detalhe
+
+hist(cred$diahora)   
+hist(cred$valor)   
+hist(cred$uso24h)
+
+# Afim de melhor visualização dos dados, vamos dividir o valor do amount por mil
+
+cred$valor <- cred$valor/1000
+
+hist(v1[v1<200])
+hist(v1[v1>200])
+
+table(cred$valor>200000, cred$fraude)
+
+sum(cred$valor)
+sum(cred$valor[cred$valor<200])
+sum(cred$valor[cred$valor>200])/sum(cred$valor)
+describe(cred$valor[cred$valor>200])
+
+str(cred)
+summary(cred)
+
+# Aparentemente, os valores das variáveis são tão concentrados que, a princípio, 
+#não faz sentido excluir possíveis outliers, apesar da existencia deles pelo critério do inter quartil, logo abaixo. Mais adiante vamos testar os outliers dado o modelo de regressão 
+
+boxplot.stats(cred$diahora)
+boxplot.stats(cred$valor)
+boxplot.stats(cred$uso24h)
+
+# Não temos dados faltantes na base
+
+# Dado que o modelo tem poucas variáveis, vamos treinar ele sem maiores transformações na regressão logística, por hora, sem discretizações ou normalizações. É provavel que para outros modelos aplicados, 
+#seja interessante usar discretizações e normalização nas variáveis numéricas, em especial nas que apresentam possíveis outliers;
+
+# Agora, vamos aplicar com o modelo de regressão logística, dividindo a base com o K Fold Cross Validation
+# Antes, afim de verificar a eficácia do K Fold Cross Validation, vamos fazer um teste com o modelo de regressão usando uma amostra
+
+C = sample(1:nrow(cred), 0.7*nrow(cred))
+
+cred_train <- cred[C,]
+cred_test <- cred[-C,]
+
+
+fit <- glm(fraude ~.,
+           data = cred_train,
+           family = binomial("logit"))
+
+summary(fit)
+
+predict_test = predict(fit, newdata=cred_test, type="response")>0.5
+
+c_matrix=table(cred_test$fraude,predict_test)
+
+print(c_matrix)
+
+cat('Accuracy: ', sum(diag(c_matrix))/sum(c_matrix)*100, ' %')
+
+
+fit_filtered <- glm(fraude ~ diahora 
+                    + país,
+           data=cred_train,
+           family = binomial("logit"))
+
+summary(fit_filtered)
+
+predict_test = predict(fit_filtered, newdata=cred_test, type="response")>0.5
+
+c_matrix=table(cred_test$fraude,predict_test)
+
+print(c_matrix)
+
+cat('Accuracy: ', sum(diag(c_matrix))/sum(c_matrix)*100, ' %')
+
+# Verificamos que as variáveis 'valor' e 'uso24h' podem ser desprezadas, pois não apresentam significancia considerável. Entretando, a exclusão delas não significa melhora no modelo, que já está com acurácia alta: 99,4% para essa amostra
+
+# Existem algumas fórmulas onde você aplica uma função de for "i" to "t", mas nas pesquisas feitas, a library "caret" já trás uma função de treino que parece ser muito adequada aos propósitos desejados:
+
+# Definir o training control
+
+train_control <- trainControl(method="cv", number=10)
+
+# Treinando o modelo
+
+cred_regcv <- train(fraude ~., 
+                  data = cred, 
+                  trControl=train_control, 
+                  method="glm")
+
+# Avaliando a Regressão Logística com o CV (Cross Validation)
+summary(cred_regcv)
+print(cred_regcv)
+
+
+# Vamos executar novamente o modelo desprezando essas variáveis
+
+cred_regcv_1 <- train(fraude ~ diahora + 
+                      país, 
+                    data = cred, 
+                    trControl=train_control, 
+                    method="glm")
+
+summary(cred_regcv_1)
+print(cred_regcv_1)
+
+# Apesar de podermos desprezar as variáveis Valor e Uso24h no modelo de regressão logística, eles não afetam a modelagem e o resultado apresentado mostrou-se marginalmente igual em ambos os modelos.
+
+# O modelo já trás a acuracidade obtida com o CV, mas apenas para demonstrar a capacidade de predição,
+# podemos, "retestar" o modelo, separar uma amostra para verificar se o modelo realmente funciona:
+
+#Agora, vamos explorar os valores das variáveis e tentar entender como elas afetam as chances do cartão ser fraudado ou não
+
+exp(coef(cred_regcv$fraude))
+table(cred$diahora)
